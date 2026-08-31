@@ -16,6 +16,7 @@ final class ScanViewModel: ObservableObject {
     @Published private(set) var results: [ExtractionResult] = []
     @Published private(set) var completedCount = 0
     @Published var extractionMode: ExtractionMode = .roiRegex
+    @Published var preprocessingMode: DocumentPreprocessingMode = .original
 
     var previewImage: UIImage? { images.first }
     private let pipeline = ReceiptExtractionPipeline()
@@ -40,7 +41,7 @@ final class ScanViewModel: ObservableObject {
 
             for (index, image) in input.enumerated() {
                 do {
-                    extracted.append(try await pipeline.extract(image: image, mode: extractionMode))
+                    extracted.append(try await pipeline.extract(image: image, mode: extractionMode, preprocessing: preprocessingMode))
                 } catch {
                     failures.append("Foto \(index + 1): \(error.localizedDescription)")
                 }

@@ -22,7 +22,7 @@ struct ContentView: View {
                     statusSection
 
                     ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
-                        ResultSection(result: result, image: viewModel.images.indices.contains(index) ? viewModel.images[index] : nil, receiptNumber: index + 1)
+                        ResultSection(result: result, originalImage: viewModel.images.indices.contains(index) ? viewModel.images[index] : nil, receiptNumber: index + 1)
                     }
                 }
                     .padding()
@@ -113,6 +113,19 @@ struct ContentView: View {
             Text(viewModel.extractionMode.usesROI ? "ROI dinamis aktif; fallback ke full receipt jika confidence rendah." : "Seluruh receipt diproses.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
+
+            Text("Document preprocessing")
+                .font(.subheadline.weight(.semibold))
+                .padding(.top, 4)
+            Picker("Document preprocessing", selection: $viewModel.preprocessingMode) {
+                ForEach(DocumentPreprocessingMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.segmented)
+            Text("Segmentasi melokalisasi receipt; rectification menguji normalisasi perspektif sebelum ROI yang sama dijalankan.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
         }
     }
 
@@ -140,7 +153,7 @@ struct ContentView: View {
 
 private struct ResultSection: View {
     let result: ExtractionResult
-    let image: UIImage?
+    let originalImage: UIImage?
     let receiptNumber: Int
 
     private var summary: ReceiptSummary { result.summary }
@@ -186,12 +199,24 @@ private struct ResultSection: View {
         let info = result.diagnostics
         DisclosureGroup("Debug pipeline") {
             VStack(alignment: .leading, spacing: 8) {
-                if let image {
-                    ROIOverlay(image: image, normalizedVisionRect: info.roiUsed ? info.roiRect : nil)
+                if let originalImage {
+                    Text("Original receipt")
+                        .fontWeight(.semibold)
+                    DebugImageOverlay(image: originalImage, quadrilateral: info.documentQuadrilateral, normalizedVisionRect: result.preprocessedImage == nil && info.roiUsed ? info.roiRect : nil)
                 }
+                if let preprocessedImage = result.preprocessedImage {
+                    Text(info.preprocessingMode == .documentSegmentationAndRectification && info.rectifiedImageSize != nil ? "Rectified receipt" : "Document-localized receipt")
+                        .fontWeight(.semibold)
+                    DebugImageOverlay(image: preprocessedImage, quadrilateral: nil, normalizedVisionRect: info.roiUsed ? info.roiRect : nil)
+                }
+                Text("Preprocessing = \(info.preprocessingMode.rawValue)")
+                Text("Document detected = \(info.documentDetected.description); confidence = \(info.documentConfidence, format: .number.precision(.fractionLength(2)))")
+                Text("Document quadrilateral = \(info.documentQuadrilateral.map(quadrilateralText) ?? "none")")
+                Text("Document fallback = \(info.documentFallback ?? "none"); rectified size = \(info.rectifiedImageSize.map(sizeText) ?? "none")")
                 Text("Detected ROI: \(info.roiRect.map(rectText) ?? "none")")
                 Text("ROI confidence = \(info.roiConfidence.value, format: .number.precision(.fractionLength(2))) [\(info.roiConfidence.strategy.rawValue)]")
-                Text("ROI used = \(info.roiUsed.description); fallback = \(info.fallback ?? "none")")
+                Text("ROI used = \(info.roiUsed.description); fallback = \(info.roiFallback ?? "none")")
+                Text("Extraction mode = \(info.extractionMode.rawValue)")
                 Text("Vision observations = layout: \(info.layoutObservationCount), OCR: \(info.ocrObservationCount)")
                 debugText("Foundation input", info.foundationInput)
                 debugText("Foundation output", info.foundationOutput)
@@ -205,6 +230,18 @@ private struct ResultSection: View {
 
     private func rectText(_ rect: CGRect) -> String {
         String(format: "x=%.3f, y=%.3f, width=%.3f, height=%.3f", rect.minX, rect.minY, rect.width, rect.height)
+    }
+
+    private func quadrilateralText(_ quadrilateral: DocumentQuadrilateral) -> String {
+        "TL(\(pointText(quadrilateral.topLeft))) TR(\(pointText(quadrilateral.topRight))) BR(\(pointText(quadrilateral.bottomRight))) BL(\(pointText(quadrilateral.bottomLeft)))"
+    }
+
+    private func pointText(_ point: CGPoint) -> String {
+        String(format: "%.3f,%.3f", point.x, point.y)
+    }
+
+    private func sizeText(_ size: CGSize) -> String {
+        String(format: "%.0f×%.0f", size.width, size.height)
     }
 
     private func debugText(_ title: String, _ value: String) -> some View {
@@ -233,28 +270,53 @@ private struct ResultSection: View {
     }
 }
 
-private struct ROIOverlay: View {
+private struct DebugImageOverlay: View {
     let image: UIImage
+    let quadrilateral: DocumentQuadrilateral?
     let normalizedVisionRect: CGRect?
 
     var body: some View {
         GeometryReader { proxy in
-            Image(uiImage: image)
-                .resizable()
-                .scaledToFit()
-                .overlay {
-                    if let rect = normalizedVisionRect {
-                        // Vision is bottom-left origin; SwiftUI is top-left origin.
-                        Rectangle()
-                            .stroke(.red, lineWidth: 3)
-                            .frame(width: rect.width * proxy.size.width, height: rect.height * proxy.size.height)
-                            .position(x: (rect.minX + rect.width / 2) * proxy.size.width, y: (1 - rect.minY - rect.height / 2) * proxy.size.height)
-                    }
+            let fitted = fittedRect(in: proxy.size)
+            ZStack(alignment: .topLeading) {
+                Image(uiImage: image)
+                    .resizable()
+                    .frame(width: fitted.width, height: fitted.height)
+                    .position(x: fitted.midX, y: fitted.midY)
+                if let quadrilateral {
+                    quadrilateralPath(quadrilateral, in: fitted)
+                        .stroke(.blue, lineWidth: 3)
                 }
+                if let rect = normalizedVisionRect {
+                    Rectangle()
+                        .stroke(.red, lineWidth: 3)
+                        .frame(width: rect.width * fitted.width, height: rect.height * fitted.height)
+                        .position(x: fitted.minX + (rect.minX + rect.width / 2) * fitted.width, y: fitted.minY + (1 - rect.minY - rect.height / 2) * fitted.height)
+                }
+            }
         }
         .aspectRatio(image.size, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityLabel("Receipt dengan overlay ROI terdeteksi")
+    }
+
+    private func fittedRect(in available: CGSize) -> CGRect {
+        let scale = min(available.width / image.size.width, available.height / image.size.height)
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        return CGRect(x: (available.width - size.width) / 2, y: (available.height - size.height) / 2, width: size.width, height: size.height)
+    }
+
+    private func quadrilateralPath(_ quadrilateral: DocumentQuadrilateral, in rect: CGRect) -> Path {
+        func point(_ source: CGPoint) -> CGPoint {
+            CGPoint(x: rect.minX + source.x * rect.width, y: rect.minY + (1 - source.y) * rect.height)
+        }
+        var path = Path()
+        path.move(to: point(quadrilateral.topLeft))
+        path.addLine(to: point(quadrilateral.topRight))
+        path.addLine(to: point(quadrilateral.bottomRight))
+        path.addLine(to: point(quadrilateral.bottomLeft))
+        path.closeSubpath()
+        return path
     }
 }
 

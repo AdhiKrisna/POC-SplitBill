@@ -2,11 +2,18 @@ import CoreGraphics
 import Foundation
 
 struct ExtractionDiagnostics: Sendable {
+    let extractionMode: ExtractionMode
+    let preprocessingMode: DocumentPreprocessingMode
+    let documentDetected: Bool
+    let documentConfidence: Double
+    let documentQuadrilateral: DocumentQuadrilateral?
+    let documentFallback: String?
+    let rectifiedImageSize: CGSize?
     let requestedROI: Bool
     let roiRect: CGRect?
     let roiConfidence: ROIConfidence
     let roiUsed: Bool
-    let fallback: String?
+    let roiFallback: String?
     let layoutObservationCount: Int
     let ocrObservationCount: Int
     let foundationInput: String
