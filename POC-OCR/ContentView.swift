@@ -17,14 +17,15 @@ struct ContentView: View {
                 VStack(spacing: 16) {
                     imageSection
                     inputControls
+                    experimentControls
                     extractButton
                     statusSection
 
-                    ForEach(Array(viewModel.summaries.enumerated()), id: \.element.id) { index, summary in
-                        ResultSection(summary: summary, receiptNumber: index + 1)
+                    ForEach(Array(viewModel.results.enumerated()), id: \.element.id) { index, result in
+                        ResultSection(result: result, image: viewModel.images.indices.contains(index) ? viewModel.images[index] : nil, receiptNumber: index + 1)
                     }
                 }
-                .padding()
+                    .padding()
             }
             .navigationTitle("Scan Struk")
             .fullScreenCover(isPresented: $isCameraPresented) {
@@ -99,6 +100,22 @@ struct ContentView: View {
         .disabled(viewModel.images.isEmpty || viewModel.state == .extracting)
     }
 
+    private var experimentControls: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Mode eksperimen")
+                .font(.subheadline.weight(.semibold))
+            Picker("Mode eksperimen", selection: $viewModel.extractionMode) {
+                ForEach(ExtractionMode.allCases) { mode in
+                    Text(mode.rawValue).tag(mode)
+                }
+            }
+            .pickerStyle(.menu)
+            Text(viewModel.extractionMode.usesROI ? "ROI dinamis aktif; fallback ke full receipt jika confidence rendah." : "Seluruh receipt diproses.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        }
+    }
+
     @ViewBuilder
     private var statusSection: some View {
         if case .failed(let message) = viewModel.state {
@@ -122,8 +139,11 @@ struct ContentView: View {
 }
 
 private struct ResultSection: View {
-    let summary: ReceiptSummary
+    let result: ExtractionResult
+    let image: UIImage?
     let receiptNumber: Int
+
+    private var summary: ReceiptSummary { result.summary }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -153,10 +173,46 @@ private struct ResultSection: View {
                 }
                 .tint(.secondary)
             }
+
+            diagnostics
         }
         .padding()
         .background(Color.secondary.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    @ViewBuilder
+    private var diagnostics: some View {
+        let info = result.diagnostics
+        DisclosureGroup("Debug pipeline") {
+            VStack(alignment: .leading, spacing: 8) {
+                if let image {
+                    ROIOverlay(image: image, normalizedVisionRect: info.roiUsed ? info.roiRect : nil)
+                }
+                Text("Detected ROI: \(info.roiRect.map(rectText) ?? "none")")
+                Text("ROI confidence = \(info.roiConfidence.value, format: .number.precision(.fractionLength(2))) [\(info.roiConfidence.strategy.rawValue)]")
+                Text("ROI used = \(info.roiUsed.description); fallback = \(info.fallback ?? "none")")
+                Text("Vision observations = layout: \(info.layoutObservationCount), OCR: \(info.ocrObservationCount)")
+                debugText("Foundation input", info.foundationInput)
+                debugText("Foundation output", info.foundationOutput)
+            }
+            .font(.system(.caption, design: .monospaced))
+            .textSelection(.enabled)
+            .padding(.top, 4)
+        }
+        .tint(.secondary)
+    }
+
+    private func rectText(_ rect: CGRect) -> String {
+        String(format: "x=%.3f, y=%.3f, width=%.3f, height=%.3f", rect.minX, rect.minY, rect.width, rect.height)
+    }
+
+    private func debugText(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(title):")
+                .fontWeight(.semibold)
+            Text(value.isEmpty ? "(empty)" : value)
+        }
     }
 
     private var totalsBlock: some View {
@@ -174,6 +230,31 @@ private struct ResultSection: View {
             Text(value, format: .currency(code: "IDR"))
         }
         .font(bold ? .headline : .subheadline)
+    }
+}
+
+private struct ROIOverlay: View {
+    let image: UIImage
+    let normalizedVisionRect: CGRect?
+
+    var body: some View {
+        GeometryReader { proxy in
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+                .overlay {
+                    if let rect = normalizedVisionRect {
+                        // Vision is bottom-left origin; SwiftUI is top-left origin.
+                        Rectangle()
+                            .stroke(.red, lineWidth: 3)
+                            .frame(width: rect.width * proxy.size.width, height: rect.height * proxy.size.height)
+                            .position(x: (rect.minX + rect.width / 2) * proxy.size.width, y: (1 - rect.minY - rect.height / 2) * proxy.size.height)
+                    }
+                }
+        }
+        .aspectRatio(image.size, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityLabel("Receipt dengan overlay ROI terdeteksi")
     }
 }
 

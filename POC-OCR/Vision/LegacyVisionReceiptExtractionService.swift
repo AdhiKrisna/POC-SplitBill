@@ -19,8 +19,9 @@ protocol ReceiptExtractionService {
 }
 
 /// Vision's document model supplies rows and table cells before Swift parses the
-/// monetary fields. This avoids merging adjacent receipt lines by hand.
-final class VisionReceiptExtractionService: ReceiptExtractionService {
+/// monetary fields. This avoids merging adjacent receipt lines by hand
+///
+class VisionReceiptExtractionService: ReceiptExtractionService {
     func extract(from image: UIImage) async throws -> ReceiptSummary {
         let lines = try await recognizeLines(in: image)
         guard !lines.isEmpty else { throw ReceiptExtractionError.noTextFound }

@@ -13,24 +13,16 @@ final class ScanViewModel: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var images: [UIImage] = []
-    @Published private(set) var summaries: [ReceiptSummary] = []
+    @Published private(set) var results: [ExtractionResult] = []
     @Published private(set) var completedCount = 0
+    @Published var extractionMode: ExtractionMode = .roiRegex
 
     var previewImage: UIImage? { images.first }
-
-    private let service: ReceiptExtractionService
-
-    init() {
-        self.service = VisionReceiptExtractionService()
-    }
-
-    init(service: ReceiptExtractionService) {
-        self.service = service
-    }
+    private let pipeline = ReceiptExtractionPipeline()
 
     func setImages(_ images: [UIImage]) {
         self.images = images
-        summaries = []
+        results = []
         completedCount = 0
         state = .idle
     }
@@ -39,23 +31,23 @@ final class ScanViewModel: ObservableObject {
         guard !images.isEmpty, state != .extracting else { return }
         let input = images
         state = .extracting
-        summaries = []
+        results = []
         completedCount = 0
 
         Task {
-            var extracted: [ReceiptSummary] = []
+            var extracted: [ExtractionResult] = []
             var failures: [String] = []
 
             for (index, image) in input.enumerated() {
                 do {
-                    extracted.append(try await service.extract(from: image))
+                    extracted.append(try await pipeline.extract(image: image, mode: extractionMode))
                 } catch {
                     failures.append("Foto \(index + 1): \(error.localizedDescription)")
                 }
                 completedCount = index + 1
             }
 
-            summaries = extracted
+            results = extracted
             state = extracted.isEmpty
                 ? .failed(failures.joined(separator: "\n"))
                 : .result
@@ -64,7 +56,7 @@ final class ScanViewModel: ObservableObject {
 
     func reset() {
         images = []
-        summaries = []
+        results = []
         completedCount = 0
         state = .idle
     }
