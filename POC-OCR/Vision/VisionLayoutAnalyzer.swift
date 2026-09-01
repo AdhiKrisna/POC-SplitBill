@@ -4,20 +4,53 @@ import Vision
 final class VisionLayoutAnalyzer {
     private let recognizer = VisionDocumentRecognizer()
 
-    /// This is deliberately a separate full-document pass. Its geometry is the
-    /// input to ROI discovery; it is not the OCR result passed to the semantic model.
+    /// Full-document Vision pass used for both OCR and structural ROI discovery.
+    ///
+    /// The structured table result is additive. If RecognizeDocumentsRequest
+    /// cannot identify a table, the existing text-observation path remains usable.
     func analyze(image: UIImage) async throws -> VisionDocumentLayout {
         let observations = try await recognizer.recognizeText(in: image)
-        // Structural table analysis is additive. OCR remains usable when the
-        // document-structure request fails for a particular receipt.
-        let tables = (try? await recognizeTableRegions(in: image)) ?? []
-        return VisionDocumentLayout(observations: observations, tables: tables)
+        let tables = (try? await recognizeTables(in: image)) ?? []
+
+        return VisionDocumentLayout(
+            observations: observations,
+            tables: tables
+        )
     }
 
-    private func recognizeTableRegions(in image: UIImage) async throws -> [CGRect] {
-        guard let data = image.jpegData(compressionQuality: 1) else { return [] }
+    private func recognizeTables(in image: UIImage) async throws -> [VisionTableObservation] {
+        guard let data = image.jpegData(compressionQuality: 1) else {
+            return []
+        }
+
         let request = RecognizeDocumentsRequest()
         let documents = try await request.perform(on: data)
-        return documents.flatMap(\.document.tables).map { $0.boundingRegion.boundingBox.cgRect }
+
+        return documents.flatMap { observation in
+            observation.document.tables.map { table in
+                let rows = table.rows.map { row in
+                    let cells = row.map { cell in
+                        VisionTableCellObservation(
+                            text: cell.content.text.transcript,
+                            boundingBox: cell.content.boundingRegion.boundingBox.cgRect
+                        )
+                    }
+
+                    let rowBox = cells.reduce(CGRect.null) {
+                        $0.union($1.boundingBox)
+                    }
+
+                    return VisionTableRowObservation(
+                        boundingBox: rowBox,
+                        cells: cells
+                    )
+                }
+
+                return VisionTableObservation(
+                    boundingBox: table.boundingRegion.boundingBox.cgRect,
+                    rows: rows
+                )
+            }
+        }
     }
 }

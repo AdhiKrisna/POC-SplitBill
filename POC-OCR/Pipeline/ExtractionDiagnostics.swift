@@ -14,6 +14,9 @@ struct ExtractionDiagnostics: Sendable {
     let roiConfidence: ROIConfidence
     let roiUsed: Bool
     let roiFallback: String?
+    let roiStrategy: ROIStrategy
+    let transactionRowCount: Int
+    let structuredTransactionText: String?
     let layoutObservationCount: Int
     let ocrObservationCount: Int
     let foundationInput: String
