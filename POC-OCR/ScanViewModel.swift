@@ -16,7 +16,7 @@ final class ScanViewModel: ObservableObject {
     @Published private(set) var results: [ExtractionResult] = []
     @Published private(set) var completedCount = 0
     @Published var extractionMode: ExtractionMode = .roiRegex
-    @Published var preprocessingMode: DocumentPreprocessingMode = .original
+    @Published var preprocessingMode: DocumentPreprocessingMode = .documentSegmentationAndRectification
 
     var previewImage: UIImage? { images.first }
     private let pipeline = ReceiptExtractionPipeline()
@@ -60,5 +60,20 @@ final class ScanViewModel: ObservableObject {
         results = []
         completedCount = 0
         state = .idle
+    }
+
+    func exportVisionOCRBundle(for index: Int = 0) throws -> VisionOCRExportBundle {
+        guard results.indices.contains(index) else {
+            throw ReceiptExtractionError.noTextFound
+        }
+
+        let result = results[index]
+        return try VisionOCRExporter.exportBundle(
+            image: result.layoutLMv3Image,
+            stem: "receipt_\(index + 1)",
+            observations: result.layoutLMv3Observations,
+            documentScope: result.layoutLMv3DocumentScope,
+            transactionROIRect: result.layoutLMv3TransactionROIRect
+        )
     }
 }

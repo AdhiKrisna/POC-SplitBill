@@ -149,12 +149,17 @@ struct ContentView: View {
             viewModel.setImages(images)
         }
     }
+
+
 }
 
 private struct ResultSection: View {
     let result: ExtractionResult
     let originalImage: UIImage?
     let receiptNumber: Int
+    @State private var exportFiles: [URL] = []
+    @State private var exportError: String?
+    @State private var isSharePresented = false
 
     private var summary: ReceiptSummary { result.summary }
 
@@ -188,10 +193,15 @@ private struct ResultSection: View {
             }
 
             diagnostics
+            visionOCRJSONSection
+            exportSection
         }
         .padding()
         .background(Color.secondary.opacity(0.05))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .sheet(isPresented: $isSharePresented) {
+            ActivityView(items: exportFiles)
+        }
     }
 
     @ViewBuilder
@@ -209,6 +219,21 @@ private struct ResultSection: View {
                         .fontWeight(.semibold)
                     DebugImageOverlay(image: preprocessedImage, quadrilateral: nil, normalizedVisionRect: info.roiUsed ? info.roiRect : nil)
                 }
+                Text("Native OCR input image")
+                    .fontWeight(.semibold)
+                DebugImageOverlay(
+                    image: result.ocrImage,
+                    quadrilateral: nil,
+                    normalizedVisionRect: nil
+                )
+                Text("LayoutLMv3 full-document export image")
+                    .fontWeight(.semibold)
+                DebugImageOverlay(
+                    image: result.layoutLMv3Image,
+                    quadrilateral: nil,
+                    normalizedVisionRect: info.roiRect
+                )
+                Text("LayoutLMv3 document scope = \(result.layoutLMv3DocumentScope.rawValue)")
                 Text("Preprocessing = \(info.preprocessingMode.rawValue)")
                 Text("Document detected = \(info.documentDetected.description); confidence = \(info.documentConfidence, format: .number.precision(.fractionLength(2)))")
                 Text("Document quadrilateral = \(info.documentQuadrilateral.map(quadrilateralText) ?? "none")")
@@ -220,12 +245,50 @@ private struct ResultSection: View {
                 Text("Vision observations = layout: \(info.layoutObservationCount), OCR: \(info.ocrObservationCount)")
                 debugText("Foundation input", info.foundationInput)
                 debugText("Foundation output", info.foundationOutput)
+                if !visionOCRJSON.isEmpty {
+                    debugText("Vision OCR JSON", visionOCRJSON)
+                }
             }
             .font(.system(.caption, design: .monospaced))
             .textSelection(.enabled)
             .padding(.top, 4)
         }
         .tint(.secondary)
+    }
+
+    @ViewBuilder
+    private var visionOCRJSONSection: some View {
+        if !visionOCRJSON.isEmpty {
+            DisclosureGroup("Vision OCR JSON") {
+                Text(visionOCRJSON)
+                    .font(.system(.caption, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 4)
+            }
+            .tint(.secondary)
+        }
+    }
+
+    private var exportSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                exportLayoutLMv3Bundle()
+            } label: {
+                Label("Export LayoutLMv3 PNG + JSON", systemImage: "square.and.arrow.up")
+            }
+            .buttonStyle(.bordered)
+
+            Text("Export P0 selalu memakai full rectified image. ROI hanya disimpan sebagai bbox metadata untuk ablation.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+            if let exportError {
+                Text(exportError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
     }
 
     private func rectText(_ rect: CGRect) -> String {
@@ -268,6 +331,51 @@ private struct ResultSection: View {
         }
         .font(bold ? .headline : .subheadline)
     }
+
+    private var visionOCRJSON: String {
+        guard let data = try? VisionOCRExporter.makeJSON(
+                  image: result.layoutLMv3Image,
+                  imageFilename: "receipt_\(receiptNumber).png",
+                  observations: result.layoutLMv3Observations,
+                  documentScope: result.layoutLMv3DocumentScope,
+                  transactionROIRect: result.layoutLMv3TransactionROIRect
+              ),
+              let json = String(data: data, encoding: .utf8) else {
+            return ""
+        }
+
+        return json
+    }
+
+    private func exportLayoutLMv3Bundle() {
+        do {
+            let bundle = try VisionOCRExporter.exportBundle(
+                image: result.layoutLMv3Image,
+                stem: "receipt_\(receiptNumber)",
+                observations: result.layoutLMv3Observations,
+                documentScope: result.layoutLMv3DocumentScope,
+                transactionROIRect: result.layoutLMv3TransactionROIRect
+            )
+            exportFiles = bundle.files
+            exportError = nil
+            isSharePresented = true
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+}
+
+private struct ActivityView: UIViewControllerRepresentable {
+    let items: [URL]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(
+        _ uiViewController: UIActivityViewController,
+        context: Context
+    ) {}
 }
 
 private struct DebugImageOverlay: View {

@@ -31,6 +31,29 @@ struct VisionTextObservation: Sendable, Hashable {
     /// Vision's normalized coordinate space, with the origin at bottom-left.
     let boundingBox: CGRect
     let confidence: Float
+    /// Word boxes derived from the recognized line. LayoutLMv3 should consume
+    /// these when Vision can provide them, while the native parser keeps using
+    /// the original line observation.
+    let words: [VisionWordObservation]
+
+    init(
+        text: String,
+        boundingBox: CGRect,
+        confidence: Float,
+        words: [VisionWordObservation] = []
+    ) {
+        self.text = text
+        self.boundingBox = boundingBox
+        self.confidence = confidence
+        self.words = words
+    }
+}
+
+struct VisionWordObservation: Sendable, Hashable {
+    let text: String
+    /// Vision's normalized coordinate space, with the origin at bottom-left.
+    let boundingBox: CGRect
+    let confidence: Float
 }
 
 /// Structured table information returned by RecognizeDocumentsRequest.

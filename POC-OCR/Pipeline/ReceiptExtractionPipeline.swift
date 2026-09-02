@@ -164,7 +164,17 @@ final class ReceiptExtractionPipeline {
             diagnostics: diagnostics,
             preprocessedImage: preprocessed.didTransform
                 ? preprocessed.image
-                : nil
+                : nil,
+            ocrImage: recognitionImage,
+            ocrObservations: ocrObservations,
+            layoutLMv3Image: preprocessed.image,
+            layoutLMv3Observations: layout.observations,
+            layoutLMv3DocumentScope:
+                preprocessing == .documentSegmentationAndRectification
+                    && preprocessed.rectifiedImageSize != nil
+                ? .fullRectifiedDocument
+                : .fullDocumentUnrectified,
+            layoutLMv3TransactionROIRect: resolution.rect
         )
     }
 

@@ -12,7 +12,12 @@ final class VisionDocumentRecognizer {
                 let observations = (request.results as? [VNRecognizedTextObservation] ?? [])
                     .compactMap { observation -> VisionTextObservation? in
                         guard let candidate = observation.topCandidates(1).first else { return nil }
-                        return VisionTextObservation(text: candidate.string, boundingBox: observation.boundingBox, confidence: candidate.confidence)
+                        return VisionTextObservation(
+                            text: candidate.string,
+                            boundingBox: observation.boundingBox,
+                            confidence: candidate.confidence,
+                            words: Self.wordObservations(from: candidate)
+                        )
                     }
                     .sorted { lhs, rhs in
                         abs(lhs.boundingBox.maxY - rhs.boundingBox.maxY) > 0.015
@@ -28,6 +33,36 @@ final class VisionDocumentRecognizer {
                 try VNImageRequestHandler(cgImage: cgImage, orientation: CGImagePropertyOrientation(image.imageOrientation), options: [:]).perform([request])
             } catch { continuation.resume(throwing: error) }
         }
+    }
+
+    private static func wordObservations(
+        from candidate: VNRecognizedText
+    ) -> [VisionWordObservation] {
+        var words: [VisionWordObservation] = []
+        let text = candidate.string
+
+        text.enumerateSubstrings(
+            in: text.startIndex..<text.endIndex,
+            options: [.byWords, .substringNotRequired]
+        ) { _, substringRange, _, _ in
+            guard let rectangle = try? candidate.boundingBox(for: substringRange) else {
+                return
+            }
+
+            let word = String(text[substringRange])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !word.isEmpty else { return }
+
+            words.append(
+                VisionWordObservation(
+                    text: word,
+                    boundingBox: rectangle.boundingBox,
+                    confidence: candidate.confidence
+                )
+            )
+        }
+
+        return words
     }
 }
 
