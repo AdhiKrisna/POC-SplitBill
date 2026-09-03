@@ -3,7 +3,6 @@ import Foundation
 
 struct ExtractionDiagnostics: Sendable {
     let extractionMode: ExtractionMode
-    let preprocessingMode: DocumentPreprocessingMode
     let documentDetected: Bool
     let documentConfidence: Double
     let documentQuadrilateral: DocumentQuadrilateral?

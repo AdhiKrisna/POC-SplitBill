@@ -1,10 +1,12 @@
 import UIKit
 
 enum ExtractionMode: String, CaseIterable, Identifiable {
-    case fullReceiptRegex = "Vision + Regex"
-    case roiRegex = "Vision + ROI + Regex"
-    case fullReceiptFoundation = "Vision + Foundation"
-    case roiFoundation = "Vision + ROI + Foundation"
+    case fullReceiptRegex = "Rectified + Regex"
+    case roiRegex = "ROI + Rectified + Regex"
+    case fullReceiptFoundation = "Rectified + Foundation"
+    case roiFoundation = "ROI + Rectified + Foundation"
+    case layoutLMv3 = "LayoutLMv3 Export"
+    case visionLayoutLMv3 = "Vision + LayoutLMv3 Local"
 
     var id: String { rawValue }
     var usesROI: Bool {
@@ -13,14 +15,9 @@ enum ExtractionMode: String, CaseIterable, Identifiable {
     var usesFoundation: Bool {
         self == .fullReceiptFoundation || self == .roiFoundation
     }
-}
-
-enum DocumentPreprocessingMode: String, CaseIterable, Identifiable, Sendable {
-    case original = "Original image"
-    case documentSegmentation = "Document Segmentation"
-    case documentSegmentationAndRectification = "Segmentation + Rectification"
-
-    var id: String { rawValue }
+    var usesLayoutLMv3: Bool {
+        self == .layoutLMv3 || self == .visionLayoutLMv3
+    }
 }
 
 final class ReceiptExtractionPipeline {
@@ -31,29 +28,51 @@ final class ReceiptExtractionPipeline {
     private let foundation = FoundationReceiptExtractionService()
     private let documentSegmentation = VisionDocumentSegmentation()
     private let documentRectifier = DocumentRectifier()
+    private let layoutLMv3Extractor = LayoutLMv3ReceiptExtractor()
 
     func extract(
         image: UIImage,
-        mode: ExtractionMode,
-        preprocessing: DocumentPreprocessingMode
+        mode: ExtractionMode
     ) async throws -> ExtractionResult {
+        let isLayoutLMv3 = mode.usesLayoutLMv3
+        let runsLocalLayoutLMv3 = mode == .visionLayoutLMv3
         let preprocessed = await preprocess(
-            image: image,
-            mode: preprocessing
+            image: image
         )
 
-        let layout = try await layoutAnalyzer.analyze(
-            image: preprocessed.image
+        // This is the LayoutLMv3 OCR contract: the complete preprocessed
+        // document and observations in that image's coordinate system.
+        // It deliberately runs before, and independently from, legacy ROI work.
+        let fullDocumentObservations = try await ocr.recognizeText(
+            in: preprocessed.image
         )
 
-        guard !layout.observations.isEmpty else {
+        guard !fullDocumentObservations.isEmpty else {
             throw ReceiptExtractionError.noTextFound
         }
 
-        let resolution = roiResolver.resolve(layout: layout)
+        let layoutLMDocument = RectifiedReceiptDocument(
+            image: preprocessed.image,
+            quadrilateral: preprocessed.segmentation.quadrilateral,
+            observations: fullDocumentObservations
+        )
+
+        // RecognizeDocumentsRequest and ROIDetector remain available only to
+        // legacy ROI experiments. They are not part of LayoutLMv3 preparation.
+        let resolution: ROIResolution
+        if mode.usesROI && !isLayoutLMv3 {
+            let legacyLayout = await layoutAnalyzer.analyzeLegacyROI(
+                image: preprocessed.image,
+                observations: fullDocumentObservations
+            )
+            resolution = roiResolver.resolve(layout: legacyLayout)
+        } else {
+            resolution = notRequestedROI()
+        }
 
         let useROI =
-            mode.usesROI
+            !isLayoutLMv3
+            && mode.usesROI
             && !resolution.usedFallback
             && resolution.confidence.isReliable
             && resolution.rect != nil
@@ -61,15 +80,15 @@ final class ReceiptExtractionPipeline {
         // Keep the existing second OCR pass for Regex and as the fallback
         // source of truth. The new structured table text is used only by the
         // Foundation path so this experiment isolates the effect of structure.
-        let recognitionImage = useROI
+        let recognitionImage = !isLayoutLMv3 && useROI
             ? preprocessed.image.cropped(
                 normalizedVisionRect: resolution.rect!
             )
             : preprocessed.image
 
-        let ocrObservations = useROI
+        let ocrObservations = !isLayoutLMv3 && useROI
             ? try await ocr.recognizeText(in: recognitionImage)
-            : layout.observations
+            : fullDocumentObservations
 
         let ocrText = ocrObservations
             .map(\.text)
@@ -89,6 +108,8 @@ final class ReceiptExtractionPipeline {
         }
 
         var foundationOutput = "Not requested"
+        var layoutLMv3Predictions: [TokenPrediction] = []
+        var layoutLMv3DebugExport: LayoutLMv3DebugExport?
         let items: [ReceiptItem]
 
         if mode.usesFoundation {
@@ -125,6 +146,16 @@ final class ReceiptExtractionPipeline {
 
                 items = parser.parse(ocrObservations)
             }
+        } else if runsLocalLayoutLMv3 {
+            let output = try await layoutLMv3Extractor.predict(
+                from: layoutLMDocument.image,
+                observations: layoutLMDocument.observations
+            )
+            items = output.items
+            layoutLMv3Predictions = output.tokenPredictions
+            layoutLMv3DebugExport = output.debugExport
+        } else if isLayoutLMv3 {
+            items = []
         } else {
             items = parser.parse(ocrObservations)
         }
@@ -136,7 +167,6 @@ final class ReceiptExtractionPipeline {
 
         let diagnostics = ExtractionDiagnostics(
             extractionMode: mode,
-            preprocessingMode: preprocessing,
             documentDetected: preprocessed.segmentation.detected,
             documentConfidence: preprocessed.segmentation.confidence,
             documentQuadrilateral: preprocessed.segmentation.quadrilateral,
@@ -150,7 +180,7 @@ final class ReceiptExtractionPipeline {
             roiStrategy: resolution.confidence.strategy,
             transactionRowCount: resolution.transactionRowCount,
             structuredTransactionText: resolution.structuredText,
-            layoutObservationCount: layout.observations.count,
+            layoutObservationCount: fullDocumentObservations.count,
             ocrObservationCount: ocrObservations.count,
             foundationInput: foundationInput,
             foundationOutput: foundationOutput
@@ -167,31 +197,20 @@ final class ReceiptExtractionPipeline {
                 : nil,
             ocrImage: recognitionImage,
             ocrObservations: ocrObservations,
-            layoutLMv3Image: preprocessed.image,
-            layoutLMv3Observations: layout.observations,
+            layoutLMv3Image: layoutLMDocument.image,
+            layoutLMv3Observations: layoutLMDocument.observations,
             layoutLMv3DocumentScope:
-                preprocessing == .documentSegmentationAndRectification
-                    && preprocessed.rectifiedImageSize != nil
+                preprocessed.rectifiedImageSize != nil
                 ? .fullRectifiedDocument
                 : .fullDocumentUnrectified,
-            layoutLMv3TransactionROIRect: resolution.rect
+            layoutLMv3Predictions: layoutLMv3Predictions,
+            layoutLMv3DebugExport: layoutLMv3DebugExport
         )
     }
 
     private func preprocess(
-        image: UIImage,
-        mode: DocumentPreprocessingMode
+        image: UIImage
     ) async -> PreprocessedDocument {
-        guard mode != .original else {
-            return PreprocessedDocument(
-                image: image,
-                segmentation: notRequestedSegmentation(),
-                fallback: nil,
-                rectifiedImageSize: nil,
-                didTransform: false
-            )
-        }
-
         let segmentation: DocumentSegmentationResult
 
         do {
@@ -221,56 +240,27 @@ final class ReceiptExtractionPipeline {
             )
         }
 
-        switch mode {
-        case .original:
+        do {
+            let rectified = try documentRectifier.rectify(
+                image: image,
+                quadrilateral: quadrilateral
+            )
+
+            return PreprocessedDocument(
+                image: rectified,
+                segmentation: segmentation,
+                fallback: nil,
+                rectifiedImageSize: rectified.size,
+                didTransform: true
+            )
+        } catch {
             return PreprocessedDocument(
                 image: image,
                 segmentation: segmentation,
-                fallback: nil,
+                fallback: "original_image_after_rectification_failure",
                 rectifiedImageSize: nil,
                 didTransform: false
             )
-
-        case .documentSegmentation:
-            let crop = quadrilateral.boundingRect
-                .insetBy(dx: -0.02, dy: -0.02)
-                .intersection(
-                    CGRect(x: 0, y: 0, width: 1, height: 1)
-                )
-
-            return PreprocessedDocument(
-                image: image.cropped(
-                    normalizedVisionRect: crop
-                ),
-                segmentation: segmentation,
-                fallback: nil,
-                rectifiedImageSize: nil,
-                didTransform: true
-            )
-
-        case .documentSegmentationAndRectification:
-            do {
-                let rectified = try documentRectifier.rectify(
-                    image: image,
-                    quadrilateral: quadrilateral
-                )
-
-                return PreprocessedDocument(
-                    image: rectified,
-                    segmentation: segmentation,
-                    fallback: nil,
-                    rectifiedImageSize: rectified.size,
-                    didTransform: true
-                )
-            } catch {
-                return PreprocessedDocument(
-                    image: image,
-                    segmentation: segmentation,
-                    fallback: "original_image_after_rectification_failure",
-                    rectifiedImageSize: nil,
-                    didTransform: false
-                )
-            }
         }
     }
 
@@ -284,6 +274,20 @@ final class ReceiptExtractionPipeline {
             failureReason: reason
         )
     }
+
+    private func notRequestedROI() -> ROIResolution {
+        ROIResolution(
+            rect: nil,
+            confidence: ROIConfidence(
+                value: 0,
+                strategy: .fullDocument,
+                reason: "Not requested for this extraction mode"
+            ),
+            usedFallback: false,
+            structuredText: nil,
+            transactionRowCount: 0
+        )
+    }
 }
 
 private struct PreprocessedDocument {
@@ -292,6 +296,14 @@ private struct PreprocessedDocument {
     let fallback: String?
     let rectifiedImageSize: CGSize?
     let didTransform: Bool
+}
+
+/// Full receipt image plus OCR observations in the exact same coordinate
+/// system. This is the LayoutLMv3 handoff; it intentionally has no ROI field.
+private struct RectifiedReceiptDocument {
+    let image: UIImage
+    let quadrilateral: DocumentQuadrilateral?
+    let observations: [VisionTextObservation]
 }
 
 private func debugNumber(_ value: Double?) -> String {

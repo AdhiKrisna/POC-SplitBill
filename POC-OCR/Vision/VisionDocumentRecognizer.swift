@@ -38,31 +38,22 @@ final class VisionDocumentRecognizer {
     private static func wordObservations(
         from candidate: VNRecognizedText
     ) -> [VisionWordObservation] {
-        var words: [VisionWordObservation] = []
         let text = candidate.string
-
-        text.enumerateSubstrings(
-            in: text.startIndex..<text.endIndex,
-            options: [.byWords, .substringNotRequired]
-        ) { _, substringRange, _, _ in
-            guard let rectangle = try? candidate.boundingBox(for: substringRange) else {
-                return
+        guard let expression = try? NSRegularExpression(pattern: #"\S+"#) else {
+            return []
+        }
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        return expression.matches(in: text, range: fullRange).compactMap { match in
+            guard let substringRange = Range(match.range, in: text),
+                  let rectangle = try? candidate.boundingBox(for: substringRange) else {
+                return nil
             }
-
-            let word = String(text[substringRange])
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !word.isEmpty else { return }
-
-            words.append(
-                VisionWordObservation(
-                    text: word,
-                    boundingBox: rectangle.boundingBox,
-                    confidence: candidate.confidence
-                )
+            return VisionWordObservation(
+                text: String(text[substringRange]),
+                boundingBox: rectangle.boundingBox,
+                confidence: candidate.confidence
             )
         }
-
-        return words
     }
 }
 

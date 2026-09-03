@@ -15,8 +15,12 @@ final class ScanViewModel: ObservableObject {
     @Published private(set) var images: [UIImage] = []
     @Published private(set) var results: [ExtractionResult] = []
     @Published private(set) var completedCount = 0
-    @Published var extractionMode: ExtractionMode = .roiRegex
-    @Published var preprocessingMode: DocumentPreprocessingMode = .documentSegmentationAndRectification
+    @Published var extractionMode: ExtractionMode = .layoutLMv3 {
+        didSet {
+            guard extractionMode != oldValue else { return }
+            invalidateExtractionResults()
+        }
+    }
 
     var previewImage: UIImage? { images.first }
     private let pipeline = ReceiptExtractionPipeline()
@@ -31,6 +35,7 @@ final class ScanViewModel: ObservableObject {
     func extract() {
         guard !images.isEmpty, state != .extracting else { return }
         let input = images
+        let selectedMode = extractionMode
         state = .extracting
         results = []
         completedCount = 0
@@ -41,7 +46,10 @@ final class ScanViewModel: ObservableObject {
 
             for (index, image) in input.enumerated() {
                 do {
-                    extracted.append(try await pipeline.extract(image: image, mode: extractionMode, preprocessing: preprocessingMode))
+                    extracted.append(try await pipeline.extract(
+                        image: image,
+                        mode: selectedMode
+                    ))
                 } catch {
                     failures.append("Foto \(index + 1): \(error.localizedDescription)")
                 }
@@ -62,6 +70,12 @@ final class ScanViewModel: ObservableObject {
         state = .idle
     }
 
+    private func invalidateExtractionResults() {
+        results = []
+        completedCount = 0
+        state = .idle
+    }
+
     func exportVisionOCRBundle(for index: Int = 0) throws -> VisionOCRExportBundle {
         guard results.indices.contains(index) else {
             throw ReceiptExtractionError.noTextFound
@@ -72,8 +86,7 @@ final class ScanViewModel: ObservableObject {
             image: result.layoutLMv3Image,
             stem: "receipt_\(index + 1)",
             observations: result.layoutLMv3Observations,
-            documentScope: result.layoutLMv3DocumentScope,
-            transactionROIRect: result.layoutLMv3TransactionROIRect
+            documentScope: result.layoutLMv3DocumentScope
         )
     }
 }

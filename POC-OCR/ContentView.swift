@@ -102,31 +102,32 @@ struct ContentView: View {
 
     private var experimentControls: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Mode eksperimen")
+            Text("Pipeline eksperimen")
                 .font(.subheadline.weight(.semibold))
-            Picker("Mode eksperimen", selection: $viewModel.extractionMode) {
+            Picker("Pipeline eksperimen", selection: $viewModel.extractionMode) {
                 ForEach(ExtractionMode.allCases) { mode in
                     Text(mode.rawValue).tag(mode)
                 }
             }
             .pickerStyle(.menu)
-            Text(viewModel.extractionMode.usesROI ? "ROI dinamis aktif; fallback ke full receipt jika confidence rendah." : "Seluruh receipt diproses.")
+            .disabled(viewModel.state == .extracting)
+            Text(modeDescription)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
-            Text("Document preprocessing")
-                .font(.subheadline.weight(.semibold))
-                .padding(.top, 4)
-            Picker("Document preprocessing", selection: $viewModel.preprocessingMode) {
-                ForEach(DocumentPreprocessingMode.allCases) { mode in
-                    Text(mode.rawValue).tag(mode)
-                }
-            }
-            .pickerStyle(.segmented)
-            Text("Segmentasi melokalisasi receipt; rectification menguji normalisasi perspektif sebelum ROI yang sama dijalankan.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
         }
+    }
+
+    private var modeDescription: String {
+        if viewModel.extractionMode == .visionLayoutLMv3 {
+            return "Vision OCR + Core ML LayoutLMv3 berjalan lokal pada full rectified receipt."
+        }
+        if viewModel.extractionMode == .layoutLMv3 {
+            return "LayoutLMv3 memakai full rectified receipt. Transaction ROI dilewati sepenuhnya."
+        }
+        return viewModel.extractionMode.usesROI
+            ? "Legacy transaction ROI aktif; fallback ke full receipt jika confidence rendah."
+            : "Seluruh receipt diproses tanpa transaction ROI."
     }
 
     @ViewBuilder
@@ -162,6 +163,14 @@ private struct ResultSection: View {
     @State private var isSharePresented = false
 
     private var summary: ReceiptSummary { result.summary }
+    private var emptyItemMessage: String {
+        guard let trace = result.layoutLMv3DebugExport?.reconstruction else {
+            return "Format item belum dikenali. Teks OCR tetap tersedia di bawah."
+        }
+        return "LayoutLMv3 \(trace.status.rawValue): \(trace.nonOWordCount) kata non-O, "
+            + "\(trace.entityCounts["ITEM", default: 0]) entitas ITEM, "
+            + "0 ReceiptItem. Buka trace untuk detail."
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -170,7 +179,7 @@ private struct ResultSection: View {
                     .font(.headline)
             }
             if summary.items.isEmpty {
-                Label("Format item belum dikenali. Teks OCR tetap tersedia di bawah.", systemImage: "text.viewfinder")
+                Label(emptyItemMessage, systemImage: "text.viewfinder")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
@@ -192,6 +201,8 @@ private struct ResultSection: View {
                 .tint(.secondary)
             }
 
+            layoutLMv3PredictionSection
+
             diagnostics
             visionOCRJSONSection
             exportSection
@@ -207,42 +218,42 @@ private struct ResultSection: View {
     @ViewBuilder
     private var diagnostics: some View {
         let info = result.diagnostics
+        let isLayoutLMv3 = info.extractionMode.usesLayoutLMv3
         DisclosureGroup("Debug pipeline") {
             VStack(alignment: .leading, spacing: 8) {
                 if let originalImage {
                     Text("Original receipt")
                         .fontWeight(.semibold)
-                    DebugImageOverlay(image: originalImage, quadrilateral: info.documentQuadrilateral, normalizedVisionRect: result.preprocessedImage == nil && info.roiUsed ? info.roiRect : nil)
+                    DebugImageOverlay(image: originalImage, quadrilateral: info.documentQuadrilateral, normalizedVisionRect: !isLayoutLMv3 && result.preprocessedImage == nil && info.roiUsed ? info.roiRect : nil)
                 }
                 if let preprocessedImage = result.preprocessedImage {
-                    Text(info.preprocessingMode == .documentSegmentationAndRectification && info.rectifiedImageSize != nil ? "Rectified receipt" : "Document-localized receipt")
+                    Text(info.rectifiedImageSize != nil ? "Rectified receipt" : "Document-localized receipt")
                         .fontWeight(.semibold)
-                    DebugImageOverlay(image: preprocessedImage, quadrilateral: nil, normalizedVisionRect: info.roiUsed ? info.roiRect : nil)
+                    DebugImageOverlay(image: preprocessedImage, quadrilateral: nil, normalizedVisionRect: !isLayoutLMv3 && info.roiUsed ? info.roiRect : nil)
                 }
-                Text("Native OCR input image")
+                Text(isLayoutLMv3 || !info.roiUsed ? "OCR input scope: full rectified receipt" : "OCR input scope: transaction ROI crop")
                     .fontWeight(.semibold)
                 DebugImageOverlay(
                     image: result.ocrImage,
                     quadrilateral: nil,
                     normalizedVisionRect: nil
                 )
-                Text("LayoutLMv3 full-document export image")
-                    .fontWeight(.semibold)
-                DebugImageOverlay(
-                    image: result.layoutLMv3Image,
-                    quadrilateral: nil,
-                    normalizedVisionRect: info.roiRect
-                )
                 Text("LayoutLMv3 document scope = \(result.layoutLMv3DocumentScope.rawValue)")
-                Text("Preprocessing = \(info.preprocessingMode.rawValue)")
+                Text("Document preprocessing = segmentation + perspective rectification")
                 Text("Document detected = \(info.documentDetected.description); confidence = \(info.documentConfidence, format: .number.precision(.fractionLength(2)))")
                 Text("Document quadrilateral = \(info.documentQuadrilateral.map(quadrilateralText) ?? "none")")
                 Text("Document fallback = \(info.documentFallback ?? "none"); rectified size = \(info.rectifiedImageSize.map(sizeText) ?? "none")")
-                Text("Detected ROI: \(info.roiRect.map(rectText) ?? "none")")
-                Text("ROI confidence = \(info.roiConfidence.value, format: .number.precision(.fractionLength(2))) [\(info.roiConfidence.strategy.rawValue)]")
-                Text("ROI used = \(info.roiUsed.description); fallback = \(info.roiFallback ?? "none")")
+                if !isLayoutLMv3 && info.requestedROI {
+                    Text("Legacy transaction ROI: \(info.roiRect.map(rectText) ?? "none")")
+                    Text("Legacy ROI confidence = \(info.roiConfidence.value, format: .number.precision(.fractionLength(2))) [\(info.roiConfidence.strategy.rawValue)]")
+                    Text("Legacy ROI used = \(info.roiUsed.description); fallback = \(info.roiFallback ?? "none")")
+                } else if isLayoutLMv3 {
+                    Text("LayoutLMv3 transaction ROI = bypassed")
+                } else {
+                    Text("Legacy transaction ROI = not requested")
+                }
                 Text("Extraction mode = \(info.extractionMode.rawValue)")
-                Text("Vision observations = layout: \(info.layoutObservationCount), OCR: \(info.ocrObservationCount)")
+                Text("Full-document OCR observations = \(info.layoutObservationCount); native OCR observations = \(info.ocrObservationCount)")
                 debugText("Foundation input", info.foundationInput)
                 debugText("Foundation output", info.foundationOutput)
                 if !visionOCRJSON.isEmpty {
@@ -254,6 +265,61 @@ private struct ResultSection: View {
             .padding(.top, 4)
         }
         .tint(.secondary)
+    }
+
+    @ViewBuilder
+    private var layoutLMv3PredictionSection: some View {
+        if let debug = result.layoutLMv3DebugExport {
+            DisclosureGroup("Trace OCR word LayoutLMv3") {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verbatim: reconstructionSummary(debug.reconstruction))
+                        .fontWeight(.semibold)
+                        .padding(.bottom, 4)
+                    ForEach(debug.words, id: \.index) { word in
+                        Text(verbatim: "WORD[\(word.index)] \(word.text) bbox=\(word.normalizedBBox)")
+                            .fontWeight(.semibold)
+                        ForEach(debug.tokens.filter { $0.wordIndex == word.index }, id: \.index) { token in
+                            Text(
+                                "  \(token.token) id=\(token.tokenID) bbox=\(token.bbox) "
+                                + "\(token.predictedLabel ?? "?") "
+                                + String(format: "%.3f", token.confidence ?? 0)
+                            )
+                        }
+                    }
+                    Text("WORD-LEVEL AGGREGATION")
+                        .fontWeight(.semibold)
+                        .padding(.top, 6)
+                    ForEach(debug.reconstruction.wordPredictions, id: \.wordIndex) { prediction in
+                        Text(verbatim:
+                            "WORD[\(prediction.wordIndex)] \(prediction.text) -> "
+                            + "\(prediction.label) \(String(format: "%.3f", prediction.confidence)) "
+                            + "firstToken=\(prediction.sourceTokenIndex) "
+                            + "subwords=\(prediction.subwordTokenIndices)"
+                        )
+                    }
+                    Text("BIO ENTITIES")
+                        .fontWeight(.semibold)
+                        .padding(.top, 6)
+                    ForEach(Array(debug.reconstruction.entities.enumerated()), id: \.offset) { _, entity in
+                        Text(verbatim: "\(entity.type): \(entity.text) bbox=\(entity.bbox)")
+                    }
+                    Text("RECONSTRUCTED RECEIPT ITEMS")
+                        .fontWeight(.semibold)
+                        .padding(.top, 6)
+                    ForEach(Array(debug.reconstruction.items.enumerated()), id: \.offset) { _, item in
+                        Text(verbatim:
+                            "\(item.name) qty=\(item.quantity) unit=\(item.unitPrice) "
+                            + "line=\(item.lineTotal) rows=\([item.itemRowIndex] + item.attachedNumericRowIndices)"
+                        )
+                    }
+                }
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 4)
+            }
+            .tint(.secondary)
+        }
     }
 
     @ViewBuilder
@@ -279,7 +345,16 @@ private struct ResultSection: View {
             }
             .buttonStyle(.bordered)
 
-            Text("Export P0 selalu memakai full rectified image. ROI hanya disimpan sebagai bbox metadata untuk ablation.")
+            if result.layoutLMv3DebugExport != nil {
+                Button {
+                    exportLayoutLMv3Debug()
+                } label: {
+                    Label("Export LayoutLMv3 Debug JSON", systemImage: "ladybug")
+                }
+                .buttonStyle(.bordered)
+            }
+
+            Text("LayoutLMv3 export uses the full rectified receipt and full-document OCR boxes. Legacy transaction ROI is excluded.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
 
@@ -305,6 +380,21 @@ private struct ResultSection: View {
 
     private func sizeText(_ size: CGSize) -> String {
         String(format: "%.0f×%.0f", size.width, size.height)
+    }
+
+    private func reconstructionSummary(_ trace: LayoutLMv3ReconstructionTrace) -> String {
+        let counts = ["ITEM", "QTY", "UNIT_PRICE", "LINE_TOTAL"].map {
+            "\($0): \(trace.entityCounts[$0, default: 0])"
+        }.joined(separator: "\n")
+        return """
+        LayoutLMv3:
+        OCR words: \(trace.ocrWordCount)
+        predicted words: \(trace.predictedWordCount)
+        non-O predicted words: \(trace.nonOWordCount)
+        \(counts)
+        reconstructed items: \(trace.reconstructedItemCount)
+        status: \(trace.status.rawValue)
+        """
     }
 
     private func debugText(_ title: String, _ value: String) -> some View {
@@ -337,8 +427,7 @@ private struct ResultSection: View {
                   image: result.layoutLMv3Image,
                   imageFilename: "receipt_\(receiptNumber).png",
                   observations: result.layoutLMv3Observations,
-                  documentScope: result.layoutLMv3DocumentScope,
-                  transactionROIRect: result.layoutLMv3TransactionROIRect
+                  documentScope: result.layoutLMv3DocumentScope
               ),
               let json = String(data: data, encoding: .utf8) else {
             return ""
@@ -353,10 +442,35 @@ private struct ResultSection: View {
                 image: result.layoutLMv3Image,
                 stem: "receipt_\(receiptNumber)",
                 observations: result.layoutLMv3Observations,
-                documentScope: result.layoutLMv3DocumentScope,
-                transactionROIRect: result.layoutLMv3TransactionROIRect
+                documentScope: result.layoutLMv3DocumentScope
             )
             exportFiles = bundle.files
+            exportError = nil
+            isSharePresented = true
+        } catch {
+            exportError = error.localizedDescription
+        }
+    }
+
+    private func exportLayoutLMv3Debug() {
+        do {
+            guard let debug = result.layoutLMv3DebugExport else { return }
+            let directory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("LayoutLMv3Debug", isDirectory: true)
+                .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let jsonURL = directory.appendingPathComponent("layoutlmv3_debug_export.json")
+            try debug.encoded().write(to: jsonURL, options: .atomic)
+            var files = [jsonURL]
+            if let imageData = result.layoutLMv3Image.pngData() {
+                let imageURL = directory.appendingPathComponent("layoutlmv3_debug_receipt.png")
+                try imageData.write(to: imageURL, options: .atomic)
+                files.append(imageURL)
+            }
+            exportFiles = files
             exportError = nil
             isSharePresented = true
         } catch {
@@ -405,7 +519,7 @@ private struct DebugImageOverlay: View {
         }
         .aspectRatio(image.size, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8))
-        .accessibilityLabel("Receipt dengan overlay ROI terdeteksi")
+        .accessibilityLabel("Receipt debug overlay")
     }
 
     private func fittedRect(in available: CGSize) -> CGRect {

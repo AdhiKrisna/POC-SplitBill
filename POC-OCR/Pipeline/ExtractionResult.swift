@@ -16,5 +16,7 @@ struct ExtractionResult: Identifiable {
     let layoutLMv3Image: UIImage
     let layoutLMv3Observations: [VisionTextObservation]
     let layoutLMv3DocumentScope: VisionOCRDocumentScope
-    let layoutLMv3TransactionROIRect: CGRect?
+    /// Present only for the local Vision + LayoutLMv3 inference route.
+    let layoutLMv3Predictions: [TokenPrediction]
+    let layoutLMv3DebugExport: LayoutLMv3DebugExport?
 }

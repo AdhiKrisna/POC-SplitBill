@@ -2,14 +2,12 @@ import UIKit
 import Vision
 
 final class VisionLayoutAnalyzer {
-    private let recognizer = VisionDocumentRecognizer()
-
-    /// Full-document Vision pass used for both OCR and structural ROI discovery.
-    ///
-    /// The structured table result is additive. If RecognizeDocumentsRequest
-    /// cannot identify a table, the existing text-observation path remains usable.
-    func analyze(image: UIImage) async throws -> VisionDocumentLayout {
-        let observations = try await recognizer.recognizeText(in: image)
+    /// Legacy-only structural pass. LayoutLMv3 uses the regular full-document
+    /// OCR observations directly and must not invoke RecognizeDocumentsRequest.
+    func analyzeLegacyROI(
+        image: UIImage,
+        observations: [VisionTextObservation]
+    ) async -> VisionDocumentLayout {
         let tables = (try? await recognizeTables(in: image)) ?? []
 
         return VisionDocumentLayout(

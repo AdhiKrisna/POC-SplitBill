@@ -22,7 +22,6 @@ struct VisionOCRExportDocument: Encodable {
     let coordinateSpace: String
     let observationGranularity: String
     let documentScope: VisionOCRDocumentScope
-    let transactionROIBBox: [Int]?
     let words: [VisionOCRExportWord]
 
     enum CodingKeys: String, CodingKey {
@@ -34,7 +33,6 @@ struct VisionOCRExportDocument: Encodable {
         case coordinateSpace = "coordinate_space"
         case observationGranularity = "observation_granularity"
         case documentScope = "document_scope"
-        case transactionROIBBox = "transaction_roi_bbox"
         case words
     }
 }
@@ -52,7 +50,6 @@ enum VisionOCRExporter {
         imageFilename: String,
         observations: [VisionTextObservation],
         documentScope: VisionOCRDocumentScope,
-        transactionROIRect: CGRect? = nil,
         imageData: Data? = nil
     ) throws -> Data {
         let exportImage = uprightImage(image)
@@ -95,13 +92,6 @@ enum VisionOCRExporter {
             coordinateSpace: "ocr_image_pixels_top_left",
             observationGranularity: hasLineFallback ? "mixed_word_and_line_fallback" : "word",
             documentScope: documentScope,
-            transactionROIBBox: transactionROIRect.map {
-                pixelBBox(
-                    fromNormalizedVisionRect: $0,
-                    width: width,
-                    height: height
-                )
-            },
             words: words
         )
 
@@ -114,8 +104,7 @@ enum VisionOCRExporter {
         image: UIImage,
         stem: String,
         observations: [VisionTextObservation],
-        documentScope: VisionOCRDocumentScope,
-        transactionROIRect: CGRect? = nil
+        documentScope: VisionOCRDocumentScope
     ) throws -> VisionOCRExportBundle {
         guard documentScope == .fullRectifiedDocument else {
             throw VisionOCRExportError.requiresFullRectifiedDocument
@@ -142,7 +131,6 @@ enum VisionOCRExporter {
             imageFilename: imageURL.lastPathComponent,
             observations: observations,
             documentScope: documentScope,
-            transactionROIRect: transactionROIRect,
             imageData: pngData
         )
 
@@ -168,18 +156,6 @@ enum VisionOCRExporter {
             bbox: [x1, y1, x2, y2],
             confidence: confidence
         )
-    }
-
-    private static func pixelBBox(
-        fromNormalizedVisionRect box: CGRect,
-        width: Int,
-        height: Int
-    ) -> [Int] {
-        let x1 = max(0, min(width, Int((box.minX * CGFloat(width)).rounded(.down))))
-        let y1 = max(0, min(height, Int(((1 - box.maxY) * CGFloat(height)).rounded(.down))))
-        let x2 = max(0, min(width, Int((box.maxX * CGFloat(width)).rounded(.up))))
-        let y2 = max(0, min(height, Int(((1 - box.minY) * CGFloat(height)).rounded(.up))))
-        return [x1, y1, x2, y2]
     }
 
     private static func uprightImage(_ image: UIImage) -> UIImage {
