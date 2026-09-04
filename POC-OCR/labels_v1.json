@@ -1,0 +1,35 @@
+{
+  "labels": [
+    "O",
+    "B-ITEM",
+    "I-ITEM",
+    "B-QTY",
+    "I-QTY",
+    "B-UNIT_PRICE",
+    "I-UNIT_PRICE",
+    "B-LINE_TOTAL",
+    "I-LINE_TOTAL"
+  ],
+  "label2id": {
+    "O": 0,
+    "B-ITEM": 1,
+    "I-ITEM": 2,
+    "B-QTY": 3,
+    "I-QTY": 4,
+    "B-UNIT_PRICE": 5,
+    "I-UNIT_PRICE": 6,
+    "B-LINE_TOTAL": 7,
+    "I-LINE_TOTAL": 8
+  },
+  "id2label": {
+    "0": "O",
+    "1": "B-ITEM",
+    "2": "I-ITEM",
+    "3": "B-QTY",
+    "4": "I-QTY",
+    "5": "B-UNIT_PRICE",
+    "6": "I-UNIT_PRICE",
+    "7": "B-LINE_TOTAL",
+    "8": "I-LINE_TOTAL"
+  }
+}

@@ -120,16 +120,25 @@ struct ContentView: View {
 
     private var modeDescription: String {
         if viewModel.extractionMode == .visionLayoutLMv3 {
-            return "Vision OCR + Core ML LayoutLMv3 berjalan lokal pada full rectified receipt."
+            return "Vision OCR + Core ML LayoutLMv3 v1 berjalan lokal pada full rectified receipt."
         }
+
+        if viewModel.extractionMode == .visionLayoutLMv3V2 {
+            return "Vision OCR + Core ML LayoutLMv3 v2 berjalan lokal pada full rectified receipt."
+        }
+
         if viewModel.extractionMode == .layoutLMv3 {
-            return "LayoutLMv3 memakai full rectified receipt. Transaction ROI dilewati sepenuhnya."
+            return "LayoutLMv3 export memakai full rectified receipt. Transaction ROI dilewati sepenuhnya."
         }
+
+        if viewModel.extractionMode == .fastVLM {
+            return "FastVLM eksperimental: on-device VLM memakai full rectified receipt plus OCR mentah sebagai grounding."
+        }
+
         return viewModel.extractionMode.usesROI
             ? "Legacy transaction ROI aktif; fallback ke full receipt jika confidence rendah."
             : "Seluruh receipt diproses tanpa transaction ROI."
     }
-
     @ViewBuilder
     private var statusSection: some View {
         if case .failed(let message) = viewModel.state {
@@ -187,6 +196,12 @@ private struct ResultSection: View {
                     ItemRow(item: item)
                     Divider()
                 }
+            }
+
+            receiptMetadataSection
+            warningsSection
+
+            if shouldShowTotals {
                 totalsBlock
             }
 
@@ -256,6 +271,13 @@ private struct ResultSection: View {
                 Text("Full-document OCR observations = \(info.layoutObservationCount); native OCR observations = \(info.ocrObservationCount)")
                 debugText("Foundation input", info.foundationInput)
                 debugText("Foundation output", info.foundationOutput)
+                debugText("FastVLM output", info.fastVLMOutput)
+                if let rawModelOutput = summary.rawModelOutput,
+                   !rawModelOutput.isEmpty,
+                   rawModelOutput != info.foundationOutput,
+                   rawModelOutput != info.fastVLMOutput {
+                    debugText("Raw model output", rawModelOutput)
+                }
                 if !visionOCRJSON.isEmpty {
                     debugText("Vision OCR JSON", visionOCRJSON)
                 }
@@ -405,11 +427,69 @@ private struct ResultSection: View {
         }
     }
 
+    @ViewBuilder
+    private var receiptMetadataSection: some View {
+        if summary.storeName != nil
+            || summary.transactionDate != nil
+            || summary.transactionTime != nil {
+            VStack(alignment: .leading, spacing: 3) {
+                if let storeName = summary.storeName {
+                    Text(storeName)
+                        .font(.subheadline.weight(.semibold))
+                }
+                if let transactionDate = summary.transactionDate {
+                    Text("Tanggal: \(transactionDate)")
+                }
+                if let transactionTime = summary.transactionTime {
+                    Text("Jam: \(transactionTime)")
+                }
+            }
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var warningsSection: some View {
+        if !summary.warnings.isEmpty {
+            DisclosureGroup("Warnings") {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(summary.warnings, id: \.self) { warning in
+                        Text(warning)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .padding(.top, 4)
+            }
+            .tint(.secondary)
+        }
+    }
+
+    private var shouldShowTotals: Bool {
+        !summary.items.isEmpty
+            || summary.subtotalAmount != nil
+            || summary.taxAmount != nil
+            || summary.serviceChargeAmount != nil
+            || summary.discountTotalAmount != nil
+            || summary.grandTotalAmount != nil
+    }
+
     private var totalsBlock: some View {
         VStack(alignment: .leading, spacing: 4) {
             row("Total sebelum diskon", summary.totalBeforeDiscount)
             row("Total diskon", -summary.totalDiscount)
+            if let taxAmount = summary.taxAmount {
+                row("Pajak", taxAmount)
+            }
+            if let serviceChargeAmount = summary.serviceChargeAmount {
+                row("Service charge", serviceChargeAmount)
+            }
             row("Total setelah diskon", summary.totalAfterDiscount, bold: true)
+            if summary.grandTotalAmount != nil || summary.totalTaxAndService > 0 {
+                row("Grand total", summary.finalPayableTotal, bold: true)
+            }
         }
     }
 

@@ -6,8 +6,13 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		A9B8C7D6E5F4433221100A01 /* Models in Resources */ = {isa = PBXBuildFile; fileRef = A9B8C7D6E5F4433221100A02 /* Models */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		65EB649D304447DC00F51B0A /* POC-OCR.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "POC-OCR.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A9B8C7D6E5F4433221100A02 /* Models */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Models; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -33,6 +38,7 @@
 			isa = PBXGroup;
 			children = (
 				65EB649F304447DC00F51B0A /* POC-OCR */,
+				A9B8C7D6E5F4433221100A02 /* Models */,
 				65EB649E304447DC00F51B0A /* Products */,
 			);
 			sourceTree = "<group>";
@@ -109,6 +115,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A9B8C7D6E5F4433221100A01 /* Models in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

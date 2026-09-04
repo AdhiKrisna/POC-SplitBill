@@ -17,6 +17,7 @@ Choose one complete experiment pipeline:
 | ROI + Rectified + Regex | document segmentation, perspective rectification, transaction ROI detection, transaction ROI OCR, regex parsing |
 | Rectified + Foundation | document segmentation, perspective rectification, full-rectified OCR, Foundation Model parsing |
 | ROI + Rectified + Foundation | document segmentation, perspective rectification, transaction ROI detection, transaction ROI OCR, Foundation Model parsing |
+| FastVLM | document segmentation, perspective rectification, full-rectified OCR, experimental on-device VLM JSON extraction |
 | LayoutLMv3 Export | document segmentation, perspective rectification, full-rectified OCR, export full rectified image plus OCR words and bounding boxes |
 | Vision + LayoutLMv3 Local | document segmentation, perspective rectification, full-rectified Vision OCR, local Core ML token classification, BIO decoding, conservative line-item grouping |
 
@@ -51,24 +52,24 @@ Create the ML Program package from the LayoutLMv3 repository root:
 
 ```bash
 python coreml_export/export_layoutlmv3_coreml.py \
-  --model-dir experiments/runs/F1_2_cord_indonesian_v1_110epoch \
-  --output-dir coreml_export/out
+  --model-dir experiments/runs/F4_cord_indonesian_wildreceipt_v2_50epoch \
+  --output-dir coreml_export/out/F4_cord_indonesian_wildreceipt_v2_50epoch
 
 python coreml_export/verify_coreml_layoutlmv3.py \
-  --model-dir experiments/runs/F1_2_cord_indonesian_v1_110epoch \
-  --mlpackage coreml_export/out/LayoutLMv3ReceiptTokenClassifier.mlpackage
+  --model-dir experiments/runs/F4_cord_indonesian_wildreceipt_v2_50epoch \
+  --mlpackage coreml_export/out/F4_cord_indonesian_wildreceipt_v2_50epoch/LayoutLMv3ReceiptTokenClassifier.mlpackage
 ```
 
 Add these generated files to the POC-OCR target:
 
-- `LayoutLMv3ReceiptTokenClassifier.mlpackage`
-- `tokenizer.json`
-- `tokenizer_config.json`
-- `labels.json`
+- `LayoutLMv3_v2.mlpackage`
+- `tokenizer_v2.json`
+- `tokenizer_config_v2.json`
+- `labels_v2.json`
 
 The expected model features are `input_ids` `[1,512]`, `attention_mask`
 `[1,512]`, `bbox` `[1,512,4]`, `pixel_values` `[1,3,224,224]`, and output
-`logits` `[1,512,9]`. Select **Vision + LayoutLMv3 Local** to run the package.
+`logits` `[1,512,17]` for the current F4 V2 model. Select **Vision + LayoutLMv3 Local** to run the package.
 Missing resources, invalid tokenizer/labels, empty OCR, tensor-shape problems,
 unknown labels, and Core ML prediction failures are surfaced as extraction
 errors rather than falling back to Regex.
@@ -105,3 +106,37 @@ The on-device debug view is word-oriented: each Vision OCR word is followed by
 its subwords, token IDs, LayoutLM box, predicted BIO label, and confidence.
 Grouping remains unchanged until this preprocessing and argmax trace matches
 the Hugging Face reference.
+
+## FastVLM Experiment
+
+Select **FastVLM** to run the experimental receipt-structuring path. This route
+uses the full rectified receipt image and the raw Vision OCR text as grounding
+context. It does not use the legacy transaction ROI.
+
+The app is prepared for Apple's official `ml-fastvlm` Swift/MLX loading pattern,
+but the runtime dependency is intentionally isolated in
+`POC-OCR/FastVLM/FastVLMReceiptExtractor.swift` until the model package policy is
+final. The first target model is Apple's Apple Silicon-compatible
+`fastvlm_0.5b_stage3`, matching the smallest Stage 3 option published for
+device feasibility work.
+
+Do not commit model files. Place local experiment files under:
+
+```text
+Models/FastVLM/fastvlm_0.5b_stage3/
+```
+
+`fastvlm_0.5b_stage3` is the canonical folder name for this POC. Remove or
+ignore duplicate export folders such as `llava-fastvithd_0.5b_stage3`; the app
+does not search them.
+
+The app checks these locations in order and logs each checked path:
+
+- app bundle `Models/FastVLM/fastvlm_0.5b_stage3`
+- app bundle root `fastvlm_0.5b_stage3`
+- Application Support `Models/FastVLM/fastvlm_0.5b_stage3`
+
+The app will show a clear warning if the FastVLM model is not installed:
+`FastVLM model is not installed. Please add fastvlm_0.5b_stage3 model files.`
+If the model is present but the Swift runtime has not been wired yet, it shows:
+`FastVLM model files found, but FastVLM/MLX runtime is not integrated.`

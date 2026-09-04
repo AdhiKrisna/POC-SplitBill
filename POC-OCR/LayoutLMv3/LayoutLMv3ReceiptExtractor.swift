@@ -2,6 +2,11 @@
 import Foundation
 import UIKit
 
+enum LayoutLMv3ModelVersion {
+    case v1
+    case v2
+}
+
 enum LayoutLMv3ExtractionError: LocalizedError {
     case missingModel
     case missingTokenizer
@@ -11,11 +16,13 @@ enum LayoutLMv3ExtractionError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingModel:
-            return "LayoutLMv3ReceiptTokenClassifier.mlpackage is missing from the app target."
+            return "LayoutLMv3 model is missing from the app target."
+
         case .missingTokenizer:
-            return "tokenizer.json is missing from the app target."
+            return "LayoutLMv3 tokenizer/config is missing from the app target."
+
         case .missingLabels:
-            return "labels.json is missing from the app target."
+            return "LayoutLMv3 labels are missing from the app target."
         case .inferenceFailed(let reason):
             return "Core ML LayoutLMv3 inference failed: \(reason)"
         }
@@ -30,10 +37,22 @@ struct LayoutLMv3ExtractionOutput {
 }
 
 final class LayoutLMv3ReceiptExtractor {
+    private let version: LayoutLMv3ModelVersion
+
     private let ocr = VisionDocumentRecognizer()
     private let inputBuilder = LayoutLMv3InputBuilder()
     private let grouper = LayoutLMv3ReceiptGrouper()
-
+    private var extractionMode: ExtractionMode {
+        switch version {
+        case .v1:
+            return .visionLayoutLMv3
+        case .v2:
+            return .visionLayoutLMv3V2
+        }
+    }
+    init(version: LayoutLMv3ModelVersion) {
+        self.version = version
+    }
     /// The caller must supply the full rectified receipt. The main app route
     /// does this through ReceiptExtractionPipeline before calling `predict`.
     func extract(from image: UIImage) async throws -> ExtractionResult {
@@ -42,7 +61,8 @@ final class LayoutLMv3ReceiptExtractor {
         let output = try await predict(from: image, observations: observations)
         let rawText = observations.map(\.text).joined(separator: "\n")
         let diagnostics = ExtractionDiagnostics(
-            extractionMode: .visionLayoutLMv3,
+            extractionMode: extractionMode,
+            
             documentDetected: false,
             documentConfidence: 0,
             documentQuadrilateral: nil,
@@ -59,7 +79,8 @@ final class LayoutLMv3ReceiptExtractor {
             layoutObservationCount: observations.count,
             ocrObservationCount: observations.count,
             foundationInput: "Not requested",
-            foundationOutput: "Not requested"
+            foundationOutput: "Not requested",
+            fastVLMOutput: "Not requested"
         )
         return ExtractionResult(
             summary: ReceiptSummary(items: output.items, rawText: rawText),
@@ -133,20 +154,58 @@ final class LayoutLMv3ReceiptExtractor {
         tokenizerConfig: URL,
         labels: URL
     ) {
+        let modelName: String
+        let tokenizerName: String
+        let tokenizerConfigName: String
+        let labelsName: String
+
+        switch version {
+        case .v1:
+            modelName = "LayoutLMv3_v1"
+            tokenizerName = "tokenizer_v1"
+            tokenizerConfigName = "tokenizer_config_v1"
+            labelsName = "labels_v1"
+
+        case .v2:
+            modelName = "LayoutLMv3_v2"
+            tokenizerName = "tokenizer_v2"
+            tokenizerConfigName = "tokenizer_config_v2"
+            labelsName = "labels_v2"
+        }
+
         guard let model = Bundle.main.url(
-            forResource: "LayoutLMv3ReceiptTokenClassifier",
+            forResource: modelName,
             withExtension: "mlmodelc"
-        ) else { throw LayoutLMv3ExtractionError.missingModel }
-        guard let tokenizer = Bundle.main.url(forResource: "tokenizer", withExtension: "json") else {
+        ) else {
+            throw LayoutLMv3ExtractionError.missingModel
+        }
+
+        guard let tokenizer = Bundle.main.url(
+            forResource: tokenizerName,
+            withExtension: "json"
+        ) else {
             throw LayoutLMv3ExtractionError.missingTokenizer
         }
+
         guard let tokenizerConfig = Bundle.main.url(
-            forResource: "tokenizer_config",
+            forResource: tokenizerConfigName,
             withExtension: "json"
-        ) else { throw LayoutLMv3ExtractionError.missingTokenizer }
-        guard let labels = Bundle.main.url(forResource: "labels", withExtension: "json") else {
+        ) else {
+            throw LayoutLMv3ExtractionError.missingTokenizer
+        }
+
+        guard let labels = Bundle.main.url(
+            forResource: labelsName,
+            withExtension: "json"
+        ) else {
             throw LayoutLMv3ExtractionError.missingLabels
         }
-        return (model, tokenizer, tokenizerConfig, labels)
+
+        return (
+            model,
+            tokenizer,
+            tokenizerConfig,
+            labels
+        )
     }
 }

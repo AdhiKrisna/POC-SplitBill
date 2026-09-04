@@ -5,8 +5,10 @@ enum ExtractionMode: String, CaseIterable, Identifiable {
     case roiRegex = "ROI + Rectified + Regex"
     case fullReceiptFoundation = "Rectified + Foundation"
     case roiFoundation = "ROI + Rectified + Foundation"
+    case fastVLM = "FastVLM"
     case layoutLMv3 = "LayoutLMv3 Export"
     case visionLayoutLMv3 = "Vision + LayoutLMv3 Local"
+    case visionLayoutLMv3V2 = "Vision + LayoutLMv3 v2 Local"
 
     var id: String { rawValue }
     var usesROI: Bool {
@@ -15,8 +17,18 @@ enum ExtractionMode: String, CaseIterable, Identifiable {
     var usesFoundation: Bool {
         self == .fullReceiptFoundation || self == .roiFoundation
     }
+    var usesFastVLM: Bool {
+        self == .fastVLM
+    }
     var usesLayoutLMv3: Bool {
-        self == .layoutLMv3 || self == .visionLayoutLMv3
+        switch self {
+        case .visionLayoutLMv3,
+             .visionLayoutLMv3V2,
+             .layoutLMv3:
+            return true
+        default:
+            return false
+        }
     }
 }
 
@@ -26,16 +38,22 @@ final class ReceiptExtractionPipeline {
     private let ocr = VisionDocumentRecognizer()
     private let parser = LegacyReceiptParser()
     private let foundation = FoundationReceiptExtractionService()
+    private let fastVLM = FastVLMReceiptExtractor()
     private let documentSegmentation = VisionDocumentSegmentation()
     private let documentRectifier = DocumentRectifier()
-    private let layoutLMv3Extractor = LayoutLMv3ReceiptExtractor()
+    private let layoutLMv3ExtractorV1 =
+        LayoutLMv3ReceiptExtractor(version: .v1)
+
+    private let layoutLMv3ExtractorV2 =
+        LayoutLMv3ReceiptExtractor(version: .v2)
 
     func extract(
         image: UIImage,
         mode: ExtractionMode
     ) async throws -> ExtractionResult {
         let isLayoutLMv3 = mode.usesLayoutLMv3
-        let runsLocalLayoutLMv3 = mode == .visionLayoutLMv3
+        let runsLocalLayoutLMv3V1 = mode == .visionLayoutLMv3
+        let runsLocalLayoutLMv3V2 = mode == .visionLayoutLMv3V2
         let preprocessed = await preprocess(
             image: image
         )
@@ -108,9 +126,10 @@ final class ReceiptExtractionPipeline {
         }
 
         var foundationOutput = "Not requested"
+        var fastVLMOutput = "Not requested"
         var layoutLMv3Predictions: [TokenPrediction] = []
         var layoutLMv3DebugExport: LayoutLMv3DebugExport?
-        let items: [ReceiptItem]
+        let summary: ReceiptSummary
 
         if mode.usesFoundation {
             do {
@@ -123,7 +142,7 @@ final class ReceiptExtractionPipeline {
                 }
                 .joined(separator: "\n")
 
-                items = semantic.items.map { semanticItem in
+                let items = semantic.items.map { semanticItem in
                     let quantity = max(
                         Int((semanticItem.quantity ?? 1).rounded()),
                         1
@@ -137,28 +156,89 @@ final class ReceiptExtractionPipeline {
                         name: semanticItem.name,
                         quantity: quantity,
                         unitPrice: unitPrice,
-                        discountAmount: 0
+                        discountAmount: 0,
+                        lineTotal: semanticItem.totalPrice
                     )
                 }
+
+                summary = ReceiptSummary(
+                    items: items,
+                    rawText: ocrText,
+                    rawModelOutput: foundationOutput
+                )
             } catch {
                 foundationOutput =
                     "Unavailable/failed: \(error.localizedDescription). Legacy parser used."
 
-                items = parser.parse(ocrObservations)
+                summary = ReceiptSummary(
+                    items: parser.parse(ocrObservations),
+                    rawText: ocrText,
+                    rawModelOutput: foundationOutput,
+                    warnings: [
+                        "Foundation extraction failed; legacy parser used."
+                    ]
+                )
             }
-        } else if runsLocalLayoutLMv3 {
-            let output = try await layoutLMv3Extractor.predict(
+        } else if mode.usesFastVLM {
+            do {
+                summary = try await fastVLM.extract(
+                    image: preprocessed.image,
+                    rawText: ocrText
+                )
+                fastVLMOutput = summary.rawModelOutput ?? "No model output"
+            } catch {
+                fastVLMOutput = "Unavailable/failed: \(error.localizedDescription)"
+                summary = ReceiptSummary(
+                    items: [],
+                    rawText: ocrText,
+                    warnings: [error.localizedDescription]
+                )
+            }
+        }  else if runsLocalLayoutLMv3V1 {
+            let output = try await layoutLMv3ExtractorV1.predict(
                 from: layoutLMDocument.image,
                 observations: layoutLMDocument.observations
             )
-            items = output.items
+
+            summary = ReceiptSummary(
+                items: output.items,
+                rawText: ocrText
+            )
+
             layoutLMv3Predictions = output.tokenPredictions
             layoutLMv3DebugExport = output.debugExport
+
+        } else if runsLocalLayoutLMv3V2 {
+            let output = try await layoutLMv3ExtractorV2.predict(
+                from: layoutLMDocument.image,
+                observations: layoutLMDocument.observations
+            )
+
+            summary = ReceiptSummary(
+                items: output.items,
+                rawText: ocrText
+            )
+
+            layoutLMv3Predictions = output.tokenPredictions
+            layoutLMv3DebugExport = output.debugExport
+
         } else if isLayoutLMv3 {
-            items = []
+            summary = ReceiptSummary(
+                items: [],
+                rawText: ocrText
+            )
         } else {
-            items = parser.parse(ocrObservations)
+            summary = ReceiptSummary(
+                items: parser.parse(ocrObservations),
+                rawText: ocrText
+            )
         }
+
+        logExtractionComparison(
+            mode: mode,
+            rawTextLength: ocrText.count,
+            summary: summary
+        )
 
         let roiFallback =
             mode.usesROI && !useROI
@@ -183,14 +263,12 @@ final class ReceiptExtractionPipeline {
             layoutObservationCount: fullDocumentObservations.count,
             ocrObservationCount: ocrObservations.count,
             foundationInput: foundationInput,
-            foundationOutput: foundationOutput
+            foundationOutput: foundationOutput,
+            fastVLMOutput: fastVLMOutput
         )
 
         return ExtractionResult(
-            summary: ReceiptSummary(
-                items: items,
-                rawText: ocrText
-            ),
+            summary: summary,
             diagnostics: diagnostics,
             preprocessedImage: preprocessed.didTransform
                 ? preprocessed.image
@@ -286,6 +364,29 @@ final class ReceiptExtractionPipeline {
             usedFallback: false,
             structuredText: nil,
             transactionRowCount: 0
+        )
+    }
+
+    private func logExtractionComparison(
+        mode: ExtractionMode,
+        rawTextLength: Int,
+        summary: ReceiptSummary
+    ) {
+        let warningText = summary.warnings.isEmpty
+            ? "none"
+            : summary.warnings.joined(separator: " | ")
+        print(
+            """
+            ReceiptExtractionComparison mode=\(mode.rawValue) \
+            ocrRawTextLength=\(rawTextLength) \
+            extractedItems=\(summary.items.count) \
+            computedItemTotal=\(summary.computedItemsAfterDiscount) \
+            printedSubtotal=\(debugNumber(summary.subtotalAmount)) \
+            tax=\(debugNumber(summary.taxAmount)) \
+            serviceCharge=\(debugNumber(summary.serviceChargeAmount)) \
+            printedGrandTotal=\(debugNumber(summary.grandTotalAmount)) \
+            warnings=\(warningText)
+            """
         )
     }
 }

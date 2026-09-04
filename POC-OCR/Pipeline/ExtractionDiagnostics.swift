@@ -20,4 +20,5 @@ struct ExtractionDiagnostics: Sendable {
     let ocrObservationCount: Int
     let foundationInput: String
     let foundationOutput: String
+    let fastVLMOutput: String
 }
