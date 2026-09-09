@@ -1,5 +1,6 @@
 # Large model directories & packages
 Models/
+*.zip
 *.mlpackage/
 *.mlmodelc/
 *.safetensors
