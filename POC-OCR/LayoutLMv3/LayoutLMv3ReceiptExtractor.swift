@@ -79,8 +79,7 @@ final class LayoutLMv3ReceiptExtractor {
             layoutObservationCount: observations.count,
             ocrObservationCount: observations.count,
             foundationInput: "Not requested",
-            foundationOutput: "Not requested",
-            fastVLMOutput: "Not requested"
+            foundationOutput: "Not requested"
         )
         return ExtractionResult(
             summary: ReceiptSummary(items: output.items, rawText: rawText),
@@ -173,10 +172,12 @@ final class LayoutLMv3ReceiptExtractor {
             labelsName = "labels_v2"
         }
 
-        guard let model = Bundle.main.url(
-            forResource: modelName,
-            withExtension: "mlmodelc"
-        ) else {
+        let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc")
+            ?? Bundle.main.resourceURL?.appendingPathComponent("Models/LayoutLMv3/\(modelName).mlmodelc")
+            ?? Bundle.main.url(forResource: modelName, withExtension: "mlpackage")
+            ?? Bundle.main.resourceURL?.appendingPathComponent("Models/LayoutLMv3/\(modelName).mlpackage")
+
+        guard let model = modelURL else {
             throw LayoutLMv3ExtractionError.missingModel
         }
 

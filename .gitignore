@@ -1,15 +1,6 @@
-POC-OCR/LayoutLMv3ReceiptTokenClassifier.mlpackage/
-Models/FastVLM/*
-!Models/FastVLM/README.md
-Models/FastVLM/llava-fastvithd_0.5b_stage3/
-POC-OCR/FastVLM/fastvlm_0.5b_stage3/
-POC-OCR/FastVLM/llava-fastvithd_0.5b_stage3/
-POC-OCR/LayoutLMv3_v1.mlpackage/
-POC-OCR/LayoutLMv3_v2.mlpackage/
-
-# Core ML models
-*.mlpackage/
-
-# Local model assets (jika memang tidak ingin di-repo)
+# Large model directories & packages
 Models/
-POC-OCR/FastVLM/
+*.mlpackage/
+*.mlmodelc/
+*.safetensors
+*.bin

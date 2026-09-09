@@ -131,10 +131,6 @@ struct ContentView: View {
             return "LayoutLMv3 export memakai full rectified receipt. Transaction ROI dilewati sepenuhnya."
         }
 
-        if viewModel.extractionMode == .fastVLM {
-            return "FastVLM eksperimental: on-device VLM memakai full rectified receipt plus OCR mentah sebagai grounding."
-        }
-
         return viewModel.extractionMode.usesROI
             ? "Legacy transaction ROI aktif; fallback ke full receipt jika confidence rendah."
             : "Seluruh receipt diproses tanpa transaction ROI."
@@ -271,11 +267,9 @@ private struct ResultSection: View {
                 Text("Full-document OCR observations = \(info.layoutObservationCount); native OCR observations = \(info.ocrObservationCount)")
                 debugText("Foundation input", info.foundationInput)
                 debugText("Foundation output", info.foundationOutput)
-                debugText("FastVLM output", info.fastVLMOutput)
                 if let rawModelOutput = summary.rawModelOutput,
                    !rawModelOutput.isEmpty,
-                   rawModelOutput != info.foundationOutput,
-                   rawModelOutput != info.fastVLMOutput {
+                   rawModelOutput != info.foundationOutput {
                     debugText("Raw model output", rawModelOutput)
                 }
                 if !visionOCRJSON.isEmpty {
